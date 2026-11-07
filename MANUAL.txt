@@ -1,0 +1,253 @@
+.GSC scenes and levels
+.GHG characters and vehicles
+
+
+
+---how commands work---
+
+no20 <command> <arguments> [options]
+
+parsing commands
+    take one file, only print stuff
+
+edit commands
+    take <in> <out>. reads <in>, makes the change, checks it, writes <out>. <in> is never touched
+    check fails -> problems printed + "not written", nothing saved
+    u can just chain them so one command's <out> is the next one's <in>
+
+numbers
+    add-texture and new-material print the number of what they made. later commands use it
+    new material is often NOT the last number (goes in among similar materials), always use the printed one
+    decimal (97) or hex (0x61)
+
+paths with spaces need quotes
+
+
+
+---terms---
+
+shading   part of a material that picks the shader, basically what vertex data the mesh has and which effects are on. gotta match the meshes drawn with it
+preset   ready made shading for a common kind of material (see presets)
+render group   basically materials drawn together. solid first, then see thru, so the group matters for transparency
+
+
+
+---parsing commands---
+
+info <file>
+    header, chunk list with sizes, pointer count. for troubleshooting
+
+verify <file> [<file> ...]
+    checks the files structure, prints OK or the problems
+    edits already do this before writing, only needed for files from elsewhere
+
+textures <file>
+    every texture: number, size, data size. cubemaps say (cubemap)
+
+materials <file>
+    every material: number, texture it uses (-1 = none)
+
+material <file> <n>
+    every setting of material n by name (mat fields.txt). * = differs from default
+    use it to see how TT set up a material
+
+meshes <file>
+    every mesh, checked against its vertex/index buffers. for troubleshooting
+
+bones <file>
+    characters: every bone (number, name, parent, position), which game models are skinned, which sit rigidly on which bone
+    use it to pick --bone
+
+layers <file>
+    chars: every layer (number, name) and its game models. rigid ones say which bone
+    use it to find layer numbers for the char's .TXT
+
+
+
+---textures---
+
+add-texture <in> <out> <image>
+    adds an image as a new texture, prints its number
+      <image>   .png .jpg .bmp .tif -> converted stuff is powers of two, max 2048, DXT1 (DXT5 if it has transparency), mipmaps
+                .dds files are used as is, cubemap ddses work too (its the same as add-cubemap)
+    ex.  add-texture THINGS_PC.GSC out.gsc brick.png
+          -> added texture 187
+
+set-texture <in> <out> <material|all> <texture>
+    makes a material use a texture (-1 = none). all = every material that has a texture
+    ex.  set-texture in.gsc out.gsc 97 188
+
+add-cubemap <in> <out> <cube.dds | one face image>
+    adds a cubemap (reflection map), prints its number. use that number for envmap_texture
+      <face image>   any one of 6 images named like sky_px.png, finds the other 5 itself
+                     sets: _px _nx _py _ny _pz _nz, _posx.._negz, _right _left _top _bottom _front _back
+                     all get resized to the first ones size, power of 2, max 512
+    takes 6 texture numbers in a row (187 = the cubemap, 188-192 = empty), next texture is 193
+    texture first files (some vehicles and levels) cant have them, no game file does
+    ex.  add-cubemap THINGS_PC.GSC out.gsc sky_px.png
+          -> added cubemap 187 (takes texture numbers 187-192)
+
+convert-texture <image> <out.dds> [max]
+    image to game ready .dds
+    [max] = size limit, default 2048
+
+
+---texture animations---
+
+animations <file>
+    parses every anim
+
+add-animation <in> <out> <material> <script> <frames ...> [--custom-script]
+    the frames replace its texture, so it needs one to start with the file doesnt need to have any animations already
+      <script>   what plays it, these are all in STUFF\ATS and they only take the exact frame count:
+                 coin, coin_pause, roof_flight_field 32  WaterCaustics 30  mothshadow 29  computer 8  cctv, cctv2 5  heli_elec 3  whitenoise 2
+      <frames>   the textures it flips thru, in order, with spaces between them. has to add up to what the script takes
+                 u can mix any of these:
+                   187            texture 187, has to already be in the file (see textures)
+                   187-194        textures 187 thru 194, thats 8 frames
+                   red.png        adds the image as a new texture and uses it (same image twice only adds it once)
+                   @frames.txt    reads a text file, one per line, each line can be any of the above
+                 repeating a texture is fine, ex. 187 188 187 188 is 4 frames
+      --custom-script   use a script that isnt one of the above. u write the .ATS and add it to STUFF\ATS\ATS.TXT (YOU MIGHT NEED TO DELETE THE PAK FILE I LOWKEY DONT KNOW)
+    ex.  add-animation in.gsc out.gsc 97 computer 187-194
+          -> added animation 0 on material 97
+
+
+
+---materials---
+
+new-material <in> <out> <preset|n> [name=value ...] [options]
+    builds a material from settings, prints its number
+      <preset|n>   preset name (see presets), or an existing material number to borrow its shading
+      name=value   any setting from mat fields.txt (texture=187, layer0_colour=0xFF0000FF, glow=1) anything not given starts at the game's most common value
+    options
+      --group-of N   join material N's render group, default = group of <n>, or for a preset the group most solid mats are in, u can give a see thru mat's number for transparent materials
+      --last-group   join the last render group
+      --animation-of N   own copy of material N's texture animation, needed when replacing an animated material (studs) or it stops animating
+    ex.  new-material in.gsc out.gsc standard texture=187
+          -> created material 97 (built record, shading preset standard)
+
+
+
+---meshes---
+
+65,535 vertices per mesh
+3 bone weights per vertex (meshes using more than 8 bones get split automatically)
+it takes .bmesh or .bmodel
+
+add-mesh <in> <out> <model file> <material> <models | --layer N> [options]
+    whole model file as ONE mesh drawn with <material>, added as a new part of each game model in <models>
+      <model file>   .bmesh / .bmodel (see model files). parts merged, its own materials ignored
+      <material>   material number
+      --layer N   for chars instead of <models>, adds to layer N's model (see layers), uses its skinned model if it has one, otherwise its rigid models, rigid ones on more than one bone need --bone to pick. for anything else use the model number
+      <models>   all, or game model numbers with commas (3,7,12), all in a scene = every game model that draws something, all in a character = every skinned game model (one per suit/detail version)
+    options: see placement options
+    mesh is written in the vertex layout <material> needs
+    ex.  add-mesh in.gsc out.gsc cube.bmesh 97 all --scale 0.3
+
+import-model <in> <out> <model file> <models | --layer N> [options]
+    for a model WITH its own materials each texture gets added, each material becomes a new material, each material's faces a mesh, all added to every game model in <models>
+    options (+ placement options)
+      --presets   each material's shading from the presets (recommended, same result in every file) without it, each material borrows the shading of the most common ordinary material already in the file (textured or untextured to match)
+      --shading-of N   borrow material N's shading for the textured materials
+      --plain-shading-of N   borrow material N's shading for the untextured ones
+      --replace   remove the game models' old parts, only the imported model is drawn
+      --envmap N   every material reflects cubemap N (from add-cubemap), uses the envmap presets
+      --reflect S   how strong, 0..1, default 0.5. needs --envmap
+    materials with a normal map always use a normalmap preset
+    see thru / additive materials join a group of the same kind if the file has one
+    ex.  import-model BATMAN_PC.GHG out.ghg suit.bmodel all --presets
+
+add-layer <in> <out> <name> <model file> [options]
+    THIS IS ONLY FOR CHARACTERS
+    adds a new layer with its own game model, drawing a model file
+    its materials + textures get made the same way as import-model
+    prints the layer number + the game model number (add-mesh can add more to that model after)
+    options (+ placement options)
+      --presets, --shading-of N, --plain-shading-of N, --envmap N, --reflect S   same as import-model
+    the name can be anything but it can't match another layer. the devs use names like tt24_cape_red
+    needs a skinned game model already in the file
+    31 layers max, the game wont take more
+
+    IT WONT SHOW UP until the game is told to draw it
+    THE TOOL DOES NOT DO ANY OF THIS YOU NEED TO DO IT YOURSELF
+      add the number to the charaters TXT file, ex. CHARS\JOKER\JOKER.TXT:  layers_high=0,1,5,6,10
+        change layers_special/high/medium/low to match the ones u want
+        BATMAN AND ROBIN LAYERS ARE HARDCODED CUZ THIS GAMES CODE IS POOP SO DONT TRY THEM
+    ex.  add-layer BATMAN_PC.GHG out.ghg tt24_cape_red redcape.bmodel --presets
+          -> added layer 24 'tt24_cape_red' with 1 part(s)
+
+placement options
+    --scale S   resize, for a base batman is ~0.3 tall
+    --offset X Y Z   move (after scaling)
+    --mirror-x   mirror left/right
+    --flip-winding   turn faces inside out (if it looks hollow)
+    --bone N   for chars: bone that moves parts with no skin weights. default 0 (vehicles have first bone with models)
+    --at-bone   for chars: put the model's origin on bone N instead of at the character's feet
+
+
+---removing stuff---
+all of these take <in> <out> like the other edits and get checked the same way
+stuff still in use gets refused, it tells u what to remove first
+
+remove-mesh <in> <out> <model> [part]
+remove-mesh <in> <out> --layer N
+    takes parts off a game model. no part number = all of them
+    the mesh + its vertices go too if nothing else draws it. morphing face meshes only come off the model, their data stays
+
+remove-layer <in> <out> <n>
+    blanks a layer of ur choice
+    its game models stay in the file, use remove-mesh --layer first if u want those gone
+
+remove-material <in> <out> <n>
+    materials after it move down by 1, always recheck with materials
+    wont remove one in use, one with an animation, or the last one in its render group
+
+remove-texture <in> <out> <n>
+    textures after it move down (by 6 for a cubemap), it fixes the whole kit and kaboodle for u
+    wont remove one a material or an animation uses
+
+remove-animation <in> <out> <material>
+    takes the animation off a material. removing the last one takes the whole TAS0 chunk out
+
+
+
+
+---presets---
+for new-material and import-model --presets. values in mat fields.txt
+
+standard   textured or plain color (props, scenery)
+normalmap   + normal map (surface_texture=N)
+envmap   + reflection cube map (envmap_texture=N)
+skinned   meshes bent by a character's bones
+skinned-normalmap   skinned + normal map
+normalmap-envmap   normal map + reflection
+skinned-envmap   skinned + reflection
+skinned-normalmap-envmap   skinned + normal map + reflection
+
+skinned character meshes -> a skinned preset, everything else -> a non skinned one
+envmap presets need envmap_texture=N and it has to be a cubemap (add-cubemap), its refused otherwise
+
+
+---common settings---
+full list in mat fields.txt
+
+texture=N   main texture, -1 = none
+layer0_colour=0xFFBBGGRR   color, multiplies the texture. 0xFF0000FF = red, 0xFFFF0000 = blue
+layer0_alpha=0.5   opacity 0..1. also render_state=0x3E160011 + --group-of a see thru material
+render_state=0x3E160010   ...10 solid, ...11 alpha blend, ...12 additive. +0x2000 = double sided (0x3E162010)
+glow=1 glow_colour=0xFF00FFFF   self lit glow + its color
+specular_exponent=25   shininess, higher = smaller highlight
+reflection_power=0.5   specular strength
+surface_texture=N   normal map (normalmap presets)
+envmap_texture=N envmap_p1=0.5   cubemap from add-cubemap + strength (envmap presets)
+
+
+---problems---
+
+not written   edit failed its check (reasons above it). nothing saved
+no material N or no texture N   wrong number, or from a different file. check with materials and textures on the file your editing
+nothing shows   --scale, --offset (or --at-bone) wrong? installed over the file the level actually loads?
+looks hollow   --flip-winding
+mirrored   --mirror-x
+studs frozen   replaced an animated material: --animation-of N

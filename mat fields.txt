@@ -1,0 +1,316 @@
+offsets from material base
+(bN = bit N of that word, b2-3 = bits 2 and 3)
+names are what `material <file> <n>` prints and what `new-material ___ name=value` takes
+default = what a new material starts with (most common value over all game mats)
+
+types
+  u32   32-bit word (flags, packed color)
+  u8   byte
+  s16   signed 16-bit
+  f32   float
+  tex   texture slot (s32), -1 = no texture
+colors are 0xAABBGGRR (bytes: R, G, B, A)
+
+
+
+---shading---
+the game builds a shader from these at load and they gotta agree with the mesh's vertex data
+new-material refuses combos no game mat has
+
++0x1F0 vertex_format (u32)
+    what each vertex in the mesh contains   has to match the mesh EXACTLY or it draws garbage
+      b0   position
+      b2-3   normal (b19, b23 also normal-related, unknown)
+      b4-5   tangent (b24 = packed tangent)
+      b6-7   bitangent (b25 = packed bitangent)
+      b8   vertex color (COLOR0)
+      b9-10   extra color sets (COLOR1) per vert blend amounts .r/.g/.b scale layers 1/2/3
+      b11-13   number of UV sets (1-4)
+      b16-17   skinning (weights + bone indices)
+      b26   baked vertex lighting
+    diffuse texture but no UV set in the format -> loader adds one, stride no longer matches mesh
+    build records with >=1 UV set.
+
++0x0B4 texture_flags (u32)
+    which features the material uses
+      b0   normal map (surface_texture)
+      b3   lit with vertex color + normal(about 2/3 of materials)
+      b5   env map (envmap_texture)
+      b6,7,8   layer 1,2,3 present
+      b12   lightmap UV set (with lightmapped render_path)
+      b13   vertex-fetch texture
+      b14   vertex-fetch normal texture
+      b15   shine map (shine_texture)
+      b21   baked vertex lighting (goes with vertex_format b26)
+      b31   second UV set in use
+
++0x26C shader_flags (u32)
+    reencoding of texture flags  bits 0-14 are identical, the rest move
+    (texture flags bit -> shader_flags bit):
+      texflag b15 -> b15   only when a shine texture is set
+      texflag b16 -> b30
+      texflag b19 -> b16
+      texflag b21 -> b31
+      texflag b25 -> b20
+      texflag b31 -> b26
+    extra:
+      b6-8   also enable the per-vertex COLOR1 blend for layers 1-3
+      b12   skip light constants (same bit as texture flags b12, lightmap)
+      b15   alt envmap scaling (same bit as texflag b15, shine)
+
++0x270 shader_flags2 (u32)
+    lightmap/stencil variants
+      b8   stencil variant
+      b11   normal map
+      b13   special pass
+      b20,22   stencil
+
++0x268 input_defines (u32)
+    extra shader key word. 0 almost always
+
+UV set per texture slot (u8)
+  1 = first UV set, 2 = second, etc.
++0x15C uv_lightmap   (u8)  default 1
++0x15D uv_surface   (u8)  normal map
++0x15E uv_specular   (u8)
++0x15F uv_layer1   (u8)
++0x160 uv_layer2   (u8)
++0x161 uv_layer3   (u8)
++0x162 uv_detail   (u8)
+
+what each flag needs from vertex_format
+(every game material obeys this, 0 exceptions)
+  any diffuse texture   >= 1 UV set
+  texflag b0 (normal map)   normal + tangent
+  texflag b3   normal + vertex color
+  texflag b5 (envmap)   normal
+  texflag b8 (layer 3)   3 UV sets
+  texflag b13-14 (vtf)   tangent + bitangent
+  texflag b21 / shader_flags b31   present iff vertex_format b26
+
+presets
+(vertex_format / texture_flags / shader_flags / shader_flags2, uv_* all 1)
+  standard   0x909 / 0x8 / 0x8 / 0   textured or plain color
+  normalmap   0x929 / 0x9 / 0x9 / 0x800   + normal map
+  envmap   0x909 / 0x28 / 0x28 / 0   + cube map
+  skinned   0x28909 / 0x8 / 0x8 / 0   character meshes bent by bones
+  skinned-normalmap   0x28929 / 0x1 / 0x1 / 0x800
+  normalmap-envmap   0x929 / 0x29 / 0x29 / 0x800
+  skinned-envmap   0x28909 / 0x28 / 0x28 / 0   no game material is this (TT only reflects on rigid parts)
+  skinned-normalmap-envmap    0x28929 / 0x21 / 0x21 / 0x800   same
+
+
+---drawing---
+
++0x040 render_state (u32)
+  how it's drawn, default 0x3E160010
+    b0-3   blend: 0 opaque, 1 alpha, 2 additive, 3 subtractive, 10 opaque with fixed alpha
+    b10-11   texture addressing (wrap/clamp) for layers 0-3
+    b12-13   is a cull: 0/1 back faces, 2 none (double sided, +0x2000)
+    b14-15    depth mode
+    b20-22   alpha test: <2 off, 5 = test against ref*2, other = on
+    b23-30   alpha test reference
+
++0x044 flags (u32)
+    default 0x10
+    b22   cleared at load
+    b23   unlit when it has no render bucket
+
++0x098 render_path (u32)
+  default 0x9D00. byte +0x99 picks the draw path
+    0x9D   normal
+    0xAB   lightmapped
+    0xA8   layered
+    0x97   special
+
++0x09C unk_9c (u32)
+  default 0xFF000000, low 24 bits non zero changes a render state
+
+
+---color and layers---
+
++0x0B8 texture (tex) layer 0 = diffuse
++0x0BC layer1_texture   (tex)
++0x0C0 layer2_texture   (tex)
++0x0C4 layer3_texture   (tex)
+
++0x0C8 layer0_colour   (u32) default 0xFFFFFFFF, multiplies the layer 0 texture, or is the color when there's none
++0x0CC layer1_colour   (u32)  default 0xFF7F7F7F (game layers use 0xFFFFFFFF)
++0x0D0 layer2_colour   (u32)
++0x0D4 layer3_colour   (u32)
+
++0x0D8 layer0_alpha   (f32) default 1.0, opacity (needs an alpha render_state)
++0x0DC layer1_alpha   (f32)  layer strength 0..1
++0x0E0 layer2_alpha   (f32)
++0x0E4 layer3_alpha   (f32)
+
++0x0F8 layer1_blend (u8)
+    how layer 1 combines with what's below (see layers below)
+    0   off
+    1   over
+    2   add
+    3   subtract
+    4   multiply
++0x0F9 layer2_blend   (u8)
++0x0FA layer3_blend   (u8)
+
++0x18C layer0_lod_bias   (f32)  mip bias, default 0
++0x190 layer1_lod_bias   (f32)
++0x194 layer2_lod_bias   (f32)
++0x198 layer3_lod_bias   (f32)
+
++0x054 colour_r   (f32)  default 1
++0x058 colour_g   (f32)  default 1
++0x05C colour_b   (f32)  default 1
++0x060 colour_a   (f32)  -> lego_params / fxAttributes.x, default 0
++0x064 fx_y   (f32)  fxAttributes
++0x068 fx_z   (f32)  fxAttributes
+
+
+---lighting stuff---
+
++0x11C ambient_colour   (u32)  default 0xFF000000
++0x120 glow_colour   (u32)  self lit glow color (incandescentGlow), default 0xFF000000
++0x1B4 glow   (f32)  glow strength, also sets the stencil glow level. default 0
++0x0FC specular_texture   (tex)
++0x128 specular_colour   (u32)  default 0xFFFFFFFF
++0x12C reflection_power   (f32)  specular strength, default 0.5
++0x130 specular_exponent   (f32)  shininess (higher = smaller highlight), default 25
++0x144 fresnel_mul   (f32)  default 1.0
++0x148 fresnel_coeff   (f32)  default 2.5
++0x0E8 specular2_texture   (tex)  second specular map, read through layer 1's UVs
++0x0F4 specular2_colour   (u32)  default 0xFFFFFFFF
++0x19C specular_lod_bias   (f32)
++0x1B0 specular2_lod_bias   (f32)
++0x1B8 gooch_p0   (f32)  gooch (cartoon) lighting, default 0.4
++0x1BC gooch_p1   (f32)  default 2.0
++0x2B0 gooch_p2   (f32)  default 1.0
++0x154 dapple_limit   (f32)  default 200
++0x080 lightmap_offset0..3   (f32 x4, to +0x08C) lightmapped draw path only
+
+
+--normal maps--
+
++0x100 surface_texture   (tex)  normal map
++0x0EC surface2_texture   (tex)  second normal map, read through layer 1's UVs
++0x0F0 surface_scale   (f32)  default 1.0
++0x134 surface_p0   (f32)  default 1.0
++0x138 surface_p1   (f32)  default 1.0
++0x14C surface_p3   (f32)  surface_params.w, default 0
++0x288 surface2_p1   (f32)
++0x27C surface2_p2   (f32)
++0x0FB bitangent_flip   (u8)  non zero = flipped
++0x1A0 surface_lod_bias   (f32)
++0x1AC surface2_lod_bias   (f32)
+
+
+---reflections---
+
++0x104 envmap_texture (tex) cube map, a cubemap takes six texture slots, this is the first
++0x13C envmap_p1   (f32)  reflection strength (envmap_params.g), default 0.5
++0x140 envmap_p0   (f32)  how much lighting tints the reflection (.r, 0 = none), default 0.5
++0x248 envmap_p2   (f32)  (.b) reflection masked by the cube's alpha, default 0
++0x28C env_rotation_x   (f32)  all three 0 = random
++0x290 env_rotation_y   (f32)
++0x294 env_rotation_z   (f32)
++0x108 shine_texture   (tex)  shine map
++0x24C diffenv_texture   (tex)  diffuse environment cube
++0x2A0 diffenv_p0..3   (f32 x4, to +0x2AC)  default 1, 0, 1, 2.5
+
+
+---refraction---
+
++0x124 refraction_colour   (u32)  default 0xFF004C00
++0x150 refraction_index   (f32)  default 1.0
++0x158 refraction_alpha   (f32)  default 0.1
+
+
+--car paint--
+
++0x250 carpaint_tint0..3   (u32 x4, to +0x25C)  four tints blended by light and view angle, default 0xFF7F7F7F
++0x260 carpaint_p0   (f32)  view falloff power, default 1.0
++0x264 carpaint_p1   (f32)  light falloff power, default 1.0
+
+
+---vertex displacement (vert fetch tex)---
+
++0x10C vertex_fetch_texture   (tex)
++0x110 vtf_normal_texture   (tex)
++0x114 vtf_height   (f32)  default 1.0
++0x118 vtf_normal   (f32)  default 1.0
++0x2B4 vtf_offset   (f32)  default 0
++0x1A8 vtf_normal_lod_bias   (f32)
+
+
+---fractal noise---
+
++0x274 fractal_p0   (f32)
++0x280 fractal_p1   (f32)
++0x284 fractal_p2   (f32)
++0x278 fractal_p3   (f32)
+
+
+---UV scrolling---
+4 entries, N = 0..3
+
++0x1C0 + 4N scrollN_enable   (u32)  -1 = off
++0x1F8 + 0x14N scrollN_type_u (u8) 0 none, 2 linear, 3 sine, 4 cosine
++0x1F9 + 0x14N scrollN_type_v   (u8)
++0x1FC + 0x14N scrollN_trig_u   (f32)
++0x200 + 0x14N scrollN_trig_v   (f32)
++0x204 + 0x14N scrollN_speed_u   (f32)
++0x208 + 0x14N scrollN_speed_v   (f32)
+
+
+---texanim maps---
+
++0x298 tex_anim_map   (tex)  per pixel uv offsets, swayed over time
++0x29C tex_anim_curves   (tex)  the sway curve
+frame by frame texanim is TAS0, not part of the record
+
+
+---idk---
++0x06C unk_6c   (f32)
++0x076 unk_76   (s16)
++0x078 unk_78   (u32)  default 0xFFA6
++0x07C unk_7c   (u32)
++0x0A0 unk_a0   (u32)
++0x0B0 unk_b0   (u32)  default 1
+
+
+---not settable---
+this is filled in by either game or the tool, leave it alone!
+
++0x000-0x03C   runtime, material index (+0x038), render bucket (+0x03C)
++0x070   copy of layer0_alpha
++0x074   copy of texture (zeroed at load)
++0x1D0-0x1EF   runtime UV offsets
++0x1F4, +0x1F6   shader ids
++0x2BC   vertex declaration
++0x2C0   reference count
+
+
+---layers---
+layer 0 = texture x layer0_colour, layers 1-3 stack on top in order
+each one blends against whatever's below it using layerN_blend
+
+layerN color = its texture (uses uv_layerN) or layerN_colour if no textrue
+strength = tex alpha x layerN_alpha x per vert value if you have it
+
+blend (src is layer, dst is below)
+  1 over      dst*(1-a) + src*a
+  2 add       dst + src*a
+  3 subtract  dst - src*a
+  4 multiply  dst * (src*a + (1-a))
+
+ertex_format b9-10 (+ shader_flags b6-8) adds a 2nd vertex color, and its .r/.g/.b fade layers 1/2/3, so you can fade a layer across a wall w/o a mask
+
+only a small portion of game mats use layers, across 199 files, mostly level geometry
+  layer 1 only 1916 (over 1583, add 373, multiply 115, subtract 55, ~25 something else?)
+  layers 1+2 202
+  layers 1+2+3 8, cutscene intros only
+  layer colors always 0xFFFFFFFF, alpha usually 1.0
+  per vert blend on ~790
+
+all of this is settable with new-material, but meshes only get one UV set so uv_layerN has to be 1
+theres no 2nd vertex color yet so no per vert layers
